@@ -529,7 +529,7 @@ pub fn build_query_string(params: &BTreeMap<String, Value>) -> Result<String, an
 }
 
 /// Determines whether a request should be retried based on:
-/// - HTTP method (only GET or DELETE are retriable)
+/// - HTTP method (only GET is retriable)
 /// - HTTP status (500, 502, 503, 504)
 /// - Number of retries left.
 ///
@@ -542,8 +542,7 @@ pub fn should_retry_request(
     retries_left: Option<usize>,
 ) -> bool {
     let method = method.unwrap_or("");
-    let is_retriable_method =
-        method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("DELETE");
+    let is_retriable_method = method.eq_ignore_ascii_case("GET");
 
     let status = error.status().map_or(0, |s| s.as_u16());
     let is_retriable_status = [500, 502, 503, 504].contains(&status);
@@ -676,12 +675,13 @@ pub async fn http_request<T: DeserializeOwned + Send + 'static>(
                 let raw_bytes = match response.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
-                        attempt += 1;
-                        if attempt <= retries {
+                        if req.method() == Method::GET && attempt < retries {
+                            attempt += 1;
+                            delay(backoff * attempt as u64).await;
                             continue;
                         }
                         return Err(ConnectorError::ConnectorClientError {
-                            msg: format!("Failed to get response bytes: {e}"),
+                            msg: format!("Failed to get response bytes: {}", e.without_url()),
                             code: None,
                         });
                     }
@@ -798,13 +798,17 @@ pub async fn http_request<T: DeserializeOwned + Send + 'static>(
                 });
             }
             Err(e) => {
-                attempt += 1;
-                if should_retry_request(&e, Some(req.method().as_str()), Some(retries - attempt)) {
+                if should_retry_request(
+                    &e,
+                    Some(req.method().as_str()),
+                    Some(retries.saturating_sub(attempt)),
+                ) {
+                    attempt += 1;
                     delay(backoff * attempt as u64).await;
                     continue;
                 }
                 return Err(ConnectorError::ConnectorClientError {
-                    msg: format!("HTTP request failed: {e}"),
+                    msg: format!("HTTP request failed: {}", e.without_url()),
                     code: None,
                 });
             }
@@ -2054,12 +2058,11 @@ mod tests {
         fn retry_on_retriable_status_and_method() {
             let err = mk_http_error(500);
             assert!(should_retry_request(&err, Some("GET"), Some(1)));
-            assert!(should_retry_request(&err, Some("delete"), Some(2)));
         }
 
         #[test]
         fn retry_when_status_none_and_retriable_method() {
-            let retriable_methods = ["GET", "DELETE"];
+            let retriable_methods = ["GET"];
 
             for &method in &retriable_methods {
                 let err = mk_network_error();
@@ -2091,7 +2094,7 @@ mod tests {
 
         #[test]
         fn no_retry_on_non_retriable_method() {
-            let non_retriable_methods = ["POST", "PUT", "PATCH"];
+            let non_retriable_methods = ["POST", "PUT", "PATCH", "DELETE"];
 
             for &method in &non_retriable_methods {
                 let err = mk_http_error(500);
