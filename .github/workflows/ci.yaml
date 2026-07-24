@@ -15,15 +15,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 2 
+          fetch-depth: 0
 
       - name: Detect modified targets
         id: filter
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           MODIFIED_TARGETS=()
 
-          # Ensure HEAD^ exists
-          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+          # Pull requests must inspect the complete branch diff, not only the
+          # final commit. workflow_dispatch retains the previous HEAD^ fallback.
+          if [ -n "$PR_BASE_SHA" ]; then
+            BASE_COMMIT="$PR_BASE_SHA"
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
             BASE_COMMIT="HEAD^"
           else
             BASE_COMMIT=$(git rev-list --max-parents=0 HEAD) # First commit
@@ -44,7 +49,7 @@ jobs:
           MODIFIED_TARGETS_JSON=$(printf '%s\n' "${MODIFIED_TARGETS[@]}" | jq -R -s -c 'split("\n") | map(select(. != ""))')
 
           echo "Detected modified targets: $MODIFIED_TARGETS_JSON"
-          echo "modified_targets=$MODIFIED_TARGETS_JSON" >> $GITHUB_OUTPUT
+          echo "modified_targets=$MODIFIED_TARGETS_JSON" >> "$GITHUB_OUTPUT"
 
   build-target:
     runs-on: ubuntu-latest
@@ -67,7 +72,7 @@ jobs:
           rustflags: ""
 
       - name: Cache cargo registry & build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
