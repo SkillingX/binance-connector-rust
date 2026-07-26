@@ -711,6 +711,10 @@ pub async fn http_request<T: DeserializeOwned + Send + 'static>(
                 };
 
                 let rate_limits = parse_rate_limit_headers(&headers_map);
+                let retry_after_ms = headers_map
+                    .get("retry-after")
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .map(|seconds| seconds.saturating_mul(1_000));
 
                 if status.is_client_error() || status.is_server_error() {
                     let mut err_msg = content.clone();
@@ -752,12 +756,14 @@ pub async fn http_request<T: DeserializeOwned + Send + 'static>(
                             return Err(ConnectorError::RateLimitBanError {
                                 msg: err_msg,
                                 code: err_code,
+                                retry_after_ms,
                             });
                         }
                         429 => {
                             return Err(ConnectorError::TooManyRequestsError {
                                 msg: err_msg,
                                 code: err_code,
+                                retry_after_ms,
                             });
                         }
                         s if (500..600).contains(&s) => {
@@ -2435,7 +2441,7 @@ mod tests {
                     Err(ConnectorError::RateLimitBanError { .. })
                 ));
 
-                if let Err(ConnectorError::RateLimitBanError { msg, code }) = result {
+                if let Err(ConnectorError::RateLimitBanError { msg, code, .. }) = result {
                     assert_eq!(msg, "rate limit exceeded");
                     assert_eq!(code, Some(-1003));
                 }
@@ -2469,7 +2475,7 @@ mod tests {
                     Err(ConnectorError::TooManyRequestsError { .. })
                 ));
 
-                if let Err(ConnectorError::TooManyRequestsError { msg, code }) = result {
+                if let Err(ConnectorError::TooManyRequestsError { msg, code, .. }) = result {
                     assert_eq!(msg, "too many requests");
                     assert_eq!(code, Some(-1003));
                 }

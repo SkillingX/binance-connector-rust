@@ -102,10 +102,18 @@ pub enum ConnectorError {
     ForbiddenError { msg: String, code: Option<i64> },
 
     #[error("Too many requests. You are being rate-limited. {msg}")]
-    TooManyRequestsError { msg: String, code: Option<i64> },
+    TooManyRequestsError {
+        msg: String,
+        code: Option<i64>,
+        retry_after_ms: Option<u64>,
+    },
 
     #[error("The IP address has been banned for exceeding rate limits. {msg}")]
-    RateLimitBanError { msg: String, code: Option<i64> },
+    RateLimitBanError {
+        msg: String,
+        code: Option<i64>,
+        retry_after_ms: Option<u64>,
+    },
 
     #[error("Internal server error: {msg} (status code: {status_code:?})")]
     ServerError {
@@ -121,6 +129,20 @@ pub enum ConnectorError {
 
     #[error("Bad request: {msg}")]
     BadRequestError { msg: String, code: Option<i64> },
+}
+
+impl ConnectorError {
+    /// Returns the structured cooldown advertised by a Binance 429/418
+    /// response. Invalid or absent `Retry-After` values remain `None`; raw
+    /// response headers are never retained in the error.
+    #[must_use]
+    pub const fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            Self::TooManyRequestsError { retry_after_ms, .. }
+            | Self::RateLimitBanError { retry_after_ms, .. } => *retry_after_ms,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
